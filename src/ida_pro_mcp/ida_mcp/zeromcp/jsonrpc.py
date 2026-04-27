@@ -8,13 +8,14 @@ from typing import Any, Callable, get_type_hints, get_origin, get_args, Union, T
 from types import UnionType
 
 JsonRpcId: TypeAlias = str | int | float | None
+PendingRequestKey: TypeAlias = tuple[str | None, str | int | float]
 
 # Thread-local storage for current request context (ID + cancel event)
 _current_request = threading.local()
 
 # Global pending requests for cancellation
 _pending_requests_lock = threading.Lock()
-_pending_requests: dict[int | str, threading.Event] = {}
+_pending_requests: dict[PendingRequestKey, threading.Event] = {}
 
 
 def get_current_request_id() -> JsonRpcId:
@@ -27,26 +28,34 @@ def get_current_cancel_event() -> threading.Event | None:
     return getattr(_current_request, "cancel_event", None)
 
 
-def register_pending_request(request_id: int | str) -> threading.Event:
+def _pending_key(request_id: str | int | float, session_id: str | None) -> PendingRequestKey:
+    return (session_id, request_id)
+
+
+def register_pending_request(
+    request_id: str | int | float, session_id: str | None = None
+) -> threading.Event:
     """Register a request as pending and return its cancel event."""
     event = threading.Event()
     with _pending_requests_lock:
-        _pending_requests[request_id] = event
+        _pending_requests[_pending_key(request_id, session_id)] = event
     _current_request.cancel_event = event
     return event
 
 
-def unregister_pending_request(request_id: int | str) -> None:
+def unregister_pending_request(
+    request_id: str | int | float, session_id: str | None = None
+) -> None:
     """Unregister a pending request."""
     with _pending_requests_lock:
-        _pending_requests.pop(request_id, None)
+        _pending_requests.pop(_pending_key(request_id, session_id), None)
     _current_request.cancel_event = None
 
 
-def cancel_request(request_id: int | str) -> bool:
+def cancel_request(request_id: str | int | float, session_id: str | None = None) -> bool:
     """Signal cancellation for a pending request. Returns True if request was found."""
     with _pending_requests_lock:
-        event = _pending_requests.get(request_id)
+        event = _pending_requests.get(_pending_key(request_id, session_id))
         if event:
             event.set()
             return True
@@ -293,7 +302,7 @@ class JsonRpcRegistry:
                     # To work around this, if the expected type is a Union
                     # that does not include str, and the provided value is
                     # a str, we try to parse it as JSON first.
-                    if type(str) not in args and isinstance(value, str):
+                    if str not in args and isinstance(value, str):
                         try:
                             value = json.loads(value)
                         except json.JSONDecodeError:

@@ -344,7 +344,17 @@ class McpHttpRequestHandler(BaseHTTPRequestHandler):
             self.send_error(413, f"Payload Too Large: exceeds {self.mcp_server.post_body_limit} bytes")
             return None
 
-        return self._decompress_body(raw)
+        try:
+            body = self._decompress_body(raw)
+        except (OSError, EOFError, zlib.error) as e:
+            self.send_error(400, f"Invalid compressed request body: {e}")
+            return None
+
+        if len(body) > self.mcp_server.post_body_limit:
+            self.send_error(413, f"Payload Too Large: exceeds {self.mcp_server.post_body_limit} bytes")
+            return None
+
+        return body
 
     def _read_chunked(self) -> bytes:
         body = b""
@@ -777,8 +787,9 @@ class McpServer:
 
         # Register request for cancellation tracking
         request_id = get_current_request_id()
+        transport_session_id = self.get_current_transport_session_id()
         if request_id is not None:
-            register_pending_request(request_id)
+            register_pending_request(request_id, transport_session_id)
 
         try:
             # Wrap tool call in JSON-RPC request
@@ -805,7 +816,7 @@ class McpServer:
             }
         finally:
             if request_id is not None:
-                unregister_pending_request(request_id)
+                unregister_pending_request(request_id, transport_session_id)
 
     def _mcp_notifications_initialized(self) -> None:
         """MCP notifications/initialized - client signals initialization complete"""
@@ -813,7 +824,7 @@ class McpServer:
 
     def _mcp_notifications_cancelled(self, requestId: int | str, reason: str | None = None) -> None:
         """MCP notifications/cancelled - cancel an in-flight request"""
-        if cancel_request(requestId):
+        if cancel_request(requestId, self.get_current_transport_session_id()):
             print(f"[MCP] Cancelled request {requestId}: {reason or 'no reason'}")
         # Notifications don't return a response
 
