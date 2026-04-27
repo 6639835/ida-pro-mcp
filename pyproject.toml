@@ -56,3 +56,6 @@ omit = [
     "src/ida_pro_mcp/ida_mcp/tests/*",
     "src/ida_pro_mcp/ida_mcp/zeromcp/*",
 ]
+
+[tool.coverage.report]
+fail_under = 85
